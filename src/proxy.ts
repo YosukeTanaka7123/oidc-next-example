@@ -1,8 +1,9 @@
-import { getIronSession } from "iron-session";
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import type { SessionData } from "./lib/auth/types";
+import { getSessionById, invalidateSession } from "./lib/auth/session";
 import { isValidTenant } from "./lib/auth/types";
+
+const SESSION_COOKIE_NAME = (tenant: string) => `session_id_${tenant}`;
 
 /**
  * Proxy設定（Next.js 16+）
@@ -26,35 +27,45 @@ export async function proxy(request: NextRequest) {
     return NextResponse.redirect(new URL("/", request.url));
   }
 
-  // セッションを取得
-  const response = NextResponse.next();
-  const session = await getIronSession<SessionData>(request, response, {
-    password: process.env.SESSION_SECRET as string,
-    cookieName: "oidc_session",
-  });
-
   // 認証が必要なルートかチェック
   const isProtectedRoute =
     pathname.includes("/home") || pathname.includes("/profile");
 
   if (isProtectedRoute) {
-    // セッションチェック
-    if (!session.isLoggedIn || session.tenant !== tenant) {
-      // 未認証の場合はログインページにリダイレクト
+    // セッションIDをクッキーから取得
+    const sessionId = request.cookies.get(SESSION_COOKIE_NAME(tenant))?.value;
+
+    if (!sessionId) {
+      // セッションIDがない場合はログインページにリダイレクト
       const loginUrl = new URL(`/${tenant}/api/auth/login`, request.url);
       return NextResponse.redirect(loginUrl);
+    }
+
+    // データベースからセッションを取得
+    const session = await getSessionById(sessionId, tenant);
+
+    // セッションチェック
+    if (!session?.isLoggedIn || session.tenant !== tenant) {
+      // 未認証の場合はログインページにリダイレクト
+      const response = NextResponse.redirect(
+        new URL(`/${tenant}/api/auth/login`, request.url),
+      );
+      response.cookies.delete(SESSION_COOKIE_NAME(tenant));
+      return response;
     }
 
     // トークンの有効期限チェック
-    if (session.expiresAt && Date.now() >= session.expiresAt) {
-      // トークンが期限切れの場合はログインページにリダイレクト
-      session.destroy();
-      const loginUrl = new URL(`/${tenant}/api/auth/login`, request.url);
-      return NextResponse.redirect(loginUrl);
+    if (session.expiresAt < new Date()) {
+      // トークンが期限切れの場合はセッション無効化してログインページにリダイレクト
+      await invalidateSession(sessionId, tenant);
+      const response = NextResponse.redirect(
+        new URL(`/${tenant}/api/auth/login`, request.url),
+      );
+      return response;
     }
   }
 
-  return response;
+  return NextResponse.next();
 }
 
 /**

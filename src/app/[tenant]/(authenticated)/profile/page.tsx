@@ -7,7 +7,7 @@ type ProfilePageProps = {
 
 export default async function ProfilePage(props: ProfilePageProps) {
   const { tenant } = await props.params;
-  const user = await getCurrentUser();
+  const user = await getCurrentUser(tenant);
 
   return (
     <main className="w-full h-full grid place-content-center gap-4">

@@ -1,7 +1,11 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { exchangeCodeForTokens, getUserInfo } from "@/lib/auth/cognito";
-import { getSession } from "@/lib/auth/session";
+import {
+  deleteAuthState,
+  getAuthState,
+  upsertSession,
+} from "@/lib/auth/session";
 import { isValidTenant } from "@/lib/auth/types";
 
 /**
@@ -20,14 +24,25 @@ export async function GET(
       return NextResponse.redirect(new URL("/", request.url));
     }
 
-    const session = await getSession();
+    // AuthStateからcode_verifierとstateを取得
+    const authState = await getAuthState(tenant);
 
-    // セッションからcode_verifierとstateを取得
-    const codeVerifier = session.codeVerifier as string | undefined;
-    const storedState = session.state as string | undefined;
+    if (!authState) {
+      console.error("No auth state found");
+      return NextResponse.redirect(new URL(`/${tenant}`, request.url));
+    }
+
+    // Tenant mismatch check
+    if (authState.tenant !== tenant) {
+      console.error("Tenant mismatch in auth state");
+      return NextResponse.redirect(new URL(`/${tenant}`, request.url));
+    }
+
+    const codeVerifier = authState.codeVerifier;
+    const storedState = authState.state;
 
     if (!codeVerifier) {
-      console.error("Missing code_verifier in session");
+      console.error("Missing code_verifier in auth state");
       return NextResponse.redirect(new URL(`/${tenant}`, request.url));
     }
 
@@ -60,24 +75,27 @@ export async function GET(
     // ユーザー情報を取得
     const userInfo = await getUserInfo(tenant, tokens.access_token);
 
-    // セッションにユーザー情報とトークンを保存
-    session.isLoggedIn = true;
-    session.email = userInfo.email;
-    session.accessToken = tokens.access_token;
-    // session.idToken = tokens.id_token;
-    // session.refreshToken = tokens.refresh_token;
-    session.tenant = tenant;
-
-    // トークンの有効期限を計算（expires_inは秒単位）
-    if (tokens.expires_in) {
-      session.expiresAt = Date.now() + tokens.expires_in * 1000;
+    if (!userInfo.email) {
+      throw new Error("No email received from user info");
     }
 
-    // code_verifierとstateは使用済みなので削除
-    delete (session as { codeVerifier?: string }).codeVerifier;
-    delete (session as { state?: string }).state;
+    // トークンの有効期限が必須
+    if (!tokens.expires_in) {
+      throw new Error("No token expiration received");
+    }
 
-    await session.save();
+    // UPSERT: 既存セッション更新 or 新規セッション作成
+    await upsertSession({
+      tenant,
+      email: userInfo.email,
+      accessToken: tokens.access_token,
+      idToken: tokens.id_token,
+      refreshToken: tokens.refresh_token,
+      expiresAt: new Date(Date.now() + tokens.expires_in * 1000),
+    });
+
+    // AuthStateを削除（使用済み）
+    await deleteAuthState(authState.id, tenant);
 
     // ログイン成功後、/homeにリダイレクト
     return NextResponse.redirect(new URL(`/${tenant}/home`, request.url));

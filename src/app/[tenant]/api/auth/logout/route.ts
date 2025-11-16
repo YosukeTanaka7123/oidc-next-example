@@ -2,7 +2,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { buildLogoutUrl } from "@/lib/auth/cognito";
 import { getLogoutRedirectUrl } from "@/lib/auth/config";
-import { getSession } from "@/lib/auth/session";
+import { getSession, invalidateSession } from "@/lib/auth/session";
 import { isValidTenant } from "@/lib/auth/types";
 
 /**
@@ -21,9 +21,11 @@ export async function GET(
       return NextResponse.redirect(new URL("/", request.url));
     }
 
-    // セッションを破棄
-    const session = await getSession();
-    session.destroy();
+    // セッションを無効化
+    const session = await getSession(tenant);
+    if (session) {
+      await invalidateSession(session.id, tenant);
+    }
 
     // Cognitoのログアウトエンドポイントにリダイレクト
     const logoutRedirectUri = getLogoutRedirectUrl();

@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { buildAuthorizationUrl } from "@/lib/auth/cognito";
-import { getSession } from "@/lib/auth/session";
+import { cleanupExpiredAuthStates, createAuthState } from "@/lib/auth/session";
 import { isValidTenant } from "@/lib/auth/types";
 
 /**
@@ -20,16 +20,19 @@ export async function GET(
       return NextResponse.json({ error: "Invalid tenant" }, { status: 400 });
     }
 
+    // Clean up expired auth states (non-blocking)
+    cleanupExpiredAuthStates().catch(console.error);
+
     // 認証URLを生成（PKCE + state対応）
     const { authUrl, codeVerifier, state } =
       await buildAuthorizationUrl(tenant);
 
-    // code_verifierとstateをセッションに保存
-    const session = await getSession();
-    session.codeVerifier = codeVerifier;
-    session.state = state;
-    session.tenant = tenant;
-    await session.save();
+    // code_verifierとstateをAuthStateに保存
+    await createAuthState({
+      codeVerifier,
+      state,
+      tenant,
+    });
 
     // Cognitoの認証ページにリダイレクト
     return NextResponse.redirect(authUrl);

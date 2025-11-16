@@ -1,0 +1,49 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// Temporary storage for OIDC authentication flow (pre-authentication)
+model AuthState {
+  id           String   @id @default(cuid())
+
+  tenant       String
+
+  // OIDC flow data
+  codeVerifier String
+  state        String
+  expiresAt    DateTime
+
+  createdAt    DateTime @default(now())
+
+  @@index([expiresAt])
+}
+
+// User sessions (post-authentication only)
+model Session {
+  id            String    @id @default(cuid())
+
+  // User data (required after authentication)
+  tenant        String
+  email         String
+  isLoggedIn    Boolean   @default(false)
+  expiresAt     DateTime
+
+  // OAuth tokens (optional)
+  idToken       String?
+  accessToken   String?
+  refreshToken  String?
+
+  // Timestamps
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@unique([tenant, email], name: "unique_tenant_email")
+}
